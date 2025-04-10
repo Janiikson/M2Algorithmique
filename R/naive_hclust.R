@@ -11,26 +11,29 @@
 #' @return An object of class 'hclust' containing merge history, heights, and order
 #' @export
 naive_hclust_R <- function(dist_matrix, method = "single", dendrogramme = TRUE) {
+  # Convert dist object to matrix if necessary
+  if (inherits(dist_matrix, "dist")) {
+    dist_matrix <- as.matrix(dist_matrix)
+  }
+  
+  # Check if it's a square matrix
   if (!is.matrix(dist_matrix) || nrow(dist_matrix) != ncol(dist_matrix)) {
-    stop("dist_matrix doit être une matrice carrée.")
+    stop("dist_matrix doit être une matrice carrée")
   }
-  if (!all(dist_matrix == t(dist_matrix))) {
-    stop("dist_matrix doit être symétrique.")
-  }
-  if (!(method %in% c("single", "complete", "average"))) {
-    stop("Méthode non supportée : choisir 'single', 'complete' ou 'average'.")
-  }
-  for (k in 1:(n-1)) {
-    # Faire rien avec k, juste ralentir le code
-    x <- k * 0
-  }
+  
+  # Debug the value of n
   n <- nrow(dist_matrix)
+  print(class(dist_matrix))
+  print(is.matrix(dist_matrix))
+  print(typeof(n))
+  print(n)
+  
+  # Rest of your code...
   clusters <- as.list(1:n)
-  merge <- matrix(0, nrow = n - 1, ncol = 2)
-  height <- numeric(n - 1)
-  cluster_ids <- -(1:n)  # étiquettes initiales
+  merge <- matrix(0, nrow = n-1, ncol = 2)
+  heights <- numeric(n-1)
   next_cluster_id <- 1
- 
+
   for (step in 1:(n - 1)) {
     min_dist <- Inf
     to_merge <- c(NA, NA)
