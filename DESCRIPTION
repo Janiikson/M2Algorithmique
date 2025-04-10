@@ -1,0 +1,18 @@
+Package: FastHierarchicalClust
+Type: Package
+Title: Hierarchical Agglomerative Clustering (HAC)
+Version: 0.1.0
+Date: 2025-04-10
+Author: Janikson Garcia Brito
+Maintainer: Janikson Garcia <janikson.garcia07@gmail.com>
+Description: Implementation of Hierarchical Agglomerative Clustering (HAC) in R and Rcpp. The package includes optimized algorithms to improve computational complexity, with comparisons between different approaches. A simulation file is provided to evaluate performance and complexity.
+License: GPL-3
+Encoding: UTF-8
+Imports: 
+    Rcpp (>= 1.0.7),
+    dplyr,
+    ggplot2,
+    microbenchmark
+LinkingTo: 
+    Rcpp
+RoxygenNote: 7.3.2

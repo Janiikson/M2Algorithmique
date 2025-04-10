@@ -1,0 +1,6 @@
+useDynLib(FastHierarchicalClust, .registration=TRUE)
+importFrom(Rcpp, sourceCpp)
+export(naive_hclust_R)
+export(naive_hclust_Rcpp)
+export(fast_hclust_R)
+export(fast_hclust_Rcpp)
