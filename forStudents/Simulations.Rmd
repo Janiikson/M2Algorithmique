@@ -1,0 +1,611 @@
+---
+title: "Classification Ascendante Hiérarchique"
+author: "Janikson Garcia Brito, Yassine Ennamer, Youssef Bahmad, Youssef Hamdani"
+date: "08 avril 2025"
+output:
+  pdf_document:
+    keep_tex: true
+    fig_crop: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(fig_crop = TRUE)
+```
+
+
+```{r, echo=FALSE, results='hide', warning=FALSE}
+devtools::install_github("Janiikson/M2Algorithmique")
+library(FastHierarchicalClust)
+```
+
+
+
+```{r, include=FALSE}
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(microbenchmark)
+library(usethis)
+library(devtools)
+library(FNN)
+```
+
+
+Ce rapport présente une étude algorithmique de la Classification Ascendante Hiérarchique (CAH) dans le cadre du cours M2 Data Science Algorithmique. Nous analysons d'abord une implémentation naïve en R et C++, puis nous poserons les bases pour une solution améliorée moderne. Le rapport inclut des simulations pour comparer les performances et valider les complexités théoriques.
+
+--- 
+ 
+# Présentation du problème et objectif
+
+La Classification Ascendante Hiérarchique (CAH) est une méthode de clustering qui vise à regrouper des données en clusters en construisant une hiérarchie. On part d’un ensemble de ( n ) points, où chaque point est initialement un cluster individuel. À chaque étape, on fusionne les deux clusters les plus proches (selon une distance, ici euclidienne, et une méthode de linkage comme "single", "complete" ou "average") jusqu’à obtenir un unique cluster. Le résultat est représenté sous forme de dendrogramme.
+
+**Objectif :** Implémenter et analyser une CAH naïve, comparer les performances entre R et C++, et poser les bases pour une solution optimisée.
+
+
+# Explication de la difficulté algorithmique
+
+## Problème combinatoire
+
+La Classification Ascendante Hiérarchique (CAH) est un problème combinatoire car, à chaque étape, il faut :
+
+1. Calculer les distances entre tous les clusters (initialement \( n \) points, donc \( \binom{n}{2} \) paires).
+2. Identifier la paire de clusters la plus proche selon la méthode de *linkage*.
+3. Fusionner ces clusters et mettre à jour les distances pour la prochaine itération.
+
+Avec \( n - 1 \) fusions au total, le nombre de calculs de distances peut devenir prohibitif pour de grandes tailles \( n \).
+
+
+## Solution naïve qui en découle
+
+La solution naïve consiste à :
+
+1. Stocker une matrice de distances \( n \times n \).
+2. À chaque étape, parcourir toutes les paires de clusters pour trouver la distance minimale (ou maximale, ou moyenne selon la méthode de *linkage*).
+3. Fusionner les clusters et mettre à jour la matrice de distances.
+
+**Complexité :**
+
+- À la première étape, on calcule \( \binom{n}{2} \approx \frac{n^2}{2} \) distances.
+- À chaque fusion, on recalcule les distances entre le nouveau cluster et les autres, ce qui prend \( O(n) \) par fusion.
+- Avec \( n - 1 \) fusions, la complexité totale est en \( O(n^3) \).
+
+Nous avons implémenté cette solution naïve dans deux fonctions :
+
+- `naive_hclust_R` : en R pur.  
+- `naive_hclust_Rcpp` : en C++ via **Rcpp** pour améliorer les performances.
+
+```{r}
+# Fonction pour générer une matrice de distances
+generate_dist_matrix <- function(n) {
+  points <- matrix(runif(n * 2), nrow = n, ncol = 2)
+  dist_matrix <- as.matrix(dist(points, method = "euclidean"))
+  return(dist_matrix)
+}
+
+dist_matrix <- generate_dist_matrix(5)
+
+# Exécuter les quatre méthodes
+hc_naive_R <- naive_hclust_R(dist_matrix, method = "single", dendrogramme = FALSE)
+hc_naive_Rcpp <- naive_hclust_Rcpp(dist_matrix, method = "single", dendrogramme = FALSE)
+
+# Vérifier les résultats
+print(hc_naive_R$merge)
+print(hc_naive_Rcpp$merge)
+```
+
+
+```{r, echo=FALSE}
+naive_hclust_R(generate_dist_matrix(10))
+naive_hclust_Rcpp(generate_dist_matrix(10))
+```
+
+
+
+## Limite avec R et C++ sur la taille \( n \) du problème (temps < 5 min)
+
+Pour évaluer les limites pratiques des implémentations, nous avons mesuré les temps d'exécution pour différentes tailles \( n \), et estimé la taille maximale \( n \) pour laquelle le temps reste inférieur à 5 minutes (300 secondes).
+
+## Analyse théorique de la complexité
+
+La complexité en \( O(n^3) \) signifie que le temps d'exécution \( t \) peut être modélisé comme :
+
+$$
+t = k \cdot n^3
+$$
+
+où \( k \) est une constante qui dépend de l'implémentation (plus petite pour C++ que pour R).  
+Pour que \( t < 300 \) secondes (soit moins de 5 minutes), on peut estimer la borne supérieure pour \( n \) en résolvant :
+
+$$
+k \cdot n^3 < 300
+$$
+
+Ce qui donne :
+
+$$
+n < \left( \frac{300}{k} \right)^{1/3}
+$$
+
+Nous devons estimer \( k \) pour chaque implémentation (R et C++) à partir des mesures de temps observées lors des simulations.
+
+
+### Simulations
+
+Nous générons des points aléatoires en 2D et calculons une matrice de distances euclidiennes.  
+Les tailles testées sont :
+
+\[
+n = 10, 50, 100, 200, 300, 400, 500, 600
+\]
+
+
+
+```{r}
+# Tailles de n à tester
+n_values <- c(10, 50, 100, 200, 300, 400, 500, 600)
+
+# Stocker les temps d'exécution
+results <- data.frame(
+  n = integer(),
+  method = character(),
+  time = numeric()
+)
+
+# Tester pour chaque taille n
+set.seed(123)
+for (n in n_values) {
+  cat("Testing n =", n, "\n")
+  
+  dist_matrix <- generate_dist_matrix(n)
+  
+  time_R <- microbenchmark(
+    naive_hclust_R(dist_matrix, method = "single", dendrogramme = FALSE),
+    times = 3
+  )$time / 1e9  # Convertir en secondes
+  
+  time_Rcpp <- microbenchmark(
+    naive_hclust_Rcpp(dist_matrix, method = "single", dendrogramme = FALSE),
+    times = 3
+  )$time / 1e9  # Convertir en secondes
+  
+  results <- rbind(
+    results,
+    data.frame(n = n, method = "naive_hclust_R", time = mean(time_R)),
+    data.frame(n = n, method = "naive_hclust_Rcpp", time = mean(time_Rcpp))
+  )
+}
+
+# Ajuster un modèle t = k * n^3
+fit_R <- lm(time ~ I(n^3) - 1, data = filter(results, method == "naive_hclust_R"))
+fit_Rcpp <- lm(time ~ I(n^3) - 1, data = filter(results, method == "naive_hclust_Rcpp"))
+
+k_R <- coef(fit_R)[1]
+k_Rcpp <- coef(fit_Rcpp)[1]
+
+# Estimer la limite de n
+n_limit_R <- floor((300 / k_R)^(1/3))
+n_limit_Rcpp <- floor((300 / k_Rcpp)^(1/3))
+
+```
+
+### Graphique qui comparent les temps code R et le code C++ des méthodes naïves
+
+```{r}
+ggplot(results, aes(x = n, y = time, color = method, linetype = method)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  geom_hline(yintercept = 300, linetype = "dashed", color = "red") +
+  labs(
+    title = "Comparaison des temps d'exécution : naive_hclust_R vs naive_hclust_Rcpp",
+    x = "Taille de l'échantillon (n)",
+    y = "Temps d'exécution (secondes)",
+    color = "Méthode", linetype = "Méthode"
+  ) +
+  theme_minimal()
+```
+
+
+```{r}
+k_R
+k_Rcpp
+n_limit_R
+n_limit_Rcpp
+```
+
+Les deux méthodes présentent une croissance cubique \( O(n^3) \), comme attendu.
+
+L'implémentation `naive_hclust_Rcpp` (en C++) est **significativement plus rapide** que `naive_hclust_R` (en R pur), avec un facteur d'amélioration d’environ **17×**, basé sur le rapport des constantes \( k \) :
+
+$$
+\frac{1.131003 \times 10^{-6}}{6.559901 \times 10^{-8}} \approx 17.24
+$$
+
+Pour une taille \( n = 600 \) :
+
+- `naive_hclust_R` prend environ **244 secondes**, soit proche de la limite de 5 minutes.
+- `naive_hclust_Rcpp` ne prend qu’environ **14 secondes**, bien en dessous de cette limite.
+
+Cette différence illustre clairement l’intérêt d’une implémentation optimisée en C++ pour des volumes de données plus importants.
+
+--- 
+
+# Solution améliorée moderne
+
+## Présentation de la stratégie algorithmique
+
+### Objectif
+
+La méthode naïve recalcule à chaque étape les distances entre toutes les paires de clusters, ce qui prend :
+
+$$
+O(n^2) \text{ par itération, pour } n - 1 \text{ itérations}
+$$
+
+D'où une complexité totale de :
+
+$$
+O(n^3)
+$$
+
+L'objectif est de réduire le coût de la recherche des paires les plus proches en utilisant une structure de données spatiale : un **k-d tree**.
+
+
+**Principe du k-d tree**
+
+Un **k-d tree** est une structure de données qui partitionne l'espace en régions pour accélérer les recherches de voisins proches.  
+Pour un ensemble de \( n \) points en dimension \( d \), il permet de :
+
+- Construire l’arbre en :
+
+  $$
+  O(n \log(n))
+  $$
+
+- Trouver le voisin le plus proche d’un point en moyenne en :
+
+  $$
+  O(\log(n))
+  $$
+
+(au lieu de \( O(n) \) avec une recherche exhaustive).
+
+
+**Application à la CAH**
+
+Dans la CAH, à chaque étape, nous devons trouver la paire de clusters la plus proche. Avec un k-d tree :
+
+- **Initialement**, chaque point est un cluster individuel.  
+  On construit un k-d tree avec les \( n \) points.
+
+- **À chaque itération** :
+  - On utilise le k-d tree pour trouver les paires les plus proches en :
+
+    $ O(n \log(n)) $  au lieu de : $ O(n^2) $
+
+  - On fusionne les clusters, met à jour les distances, et ajuste le k-d tree (en supprimant les points fusionnés et en ajoutant le nouveau cluster).
+
+Avec \( n - 1 \) itérations, la complexité totale passe de :
+
+$$
+O(n^3) \quad \text{à} \quad O(n^2 \log(n))
+$$
+
+
+Cette amélioration rend l'algorithme plus scalable pour de grands jeux de données.
+
+
+```{r, echo=FALSE}
+fast_hclust_R(generate_dist_matrix(10))
+fast_hclust_Rcpp(generate_dist_matrix(10), method = "single")
+```
+
+
+
+## Simulations qui comparent les temps entre le naïf et le nouvel algo
+
+Nous comparons les temps d'exécution des méthodes naïves (`naive_hclust_R`, `naive_hclust_Rcpp`) avec les méthodes optimisées (`fast_hclust_R`, `fast_hclust_Rcpp`).
+
+
+```{r}
+# Fonction pour générer une matrice de distances
+generate_dist_matrix <- function(n) {
+  points <- matrix(runif(n * 2), nrow = n, ncol = 2)
+  dist_matrix <- as.matrix(dist(points, method = "euclidean"))
+  return(dist_matrix)
+}
+
+# Fonction pour générer des données presque triées
+generate_dist_matrix_nearly_sorted <- function(n) {
+  data <- matrix(0, nrow = n, ncol = 2)
+  data[, 1] <- 1:n
+  data[, 2] <- runif(n)
+  n_swap <- floor(0.05 * n)
+  swap_indices <- sample(n, n_swap)
+  data[swap_indices, 1] <- sample(data[swap_indices, 1])
+  dist_matrix <- as.matrix(dist(data, method = "euclidean"))
+  return(dist_matrix)
+}
+
+# Fonction pour mesurer le temps d'exécution
+one.simu.time <- function(n, type = "random", func = "naive_hclust_R") {
+  if (type == "random") {
+    dist_matrix <- generate_dist_matrix(n)
+  } else {
+    dist_matrix <- generate_dist_matrix_nearly_sorted(n)
+  }
+  
+  if (func == "naive_hclust_R") {
+    t <- system.time(naive_hclust_R(dist_matrix, method = "single", dendrogramme = FALSE))[[1]]
+  }
+  if (func == "naive_hclust_Rcpp") {
+    t <- system.time(naive_hclust_Rcpp(dist_matrix, method = "single", dendrogramme = FALSE))[[1]]
+  }
+  if (func == "fast_hclust_R") {
+    t <- system.time(fast_hclust_R(dist_matrix, method = "single", dendrogramme = FALSE))[[1]]
+  }
+  if (func == "fast_hclust_Rcpp") {
+    t <- system.time(fast_hclust_Rcpp(dist_matrix, method = "single", dendrogramme = FALSE))[[1]]
+  }
+  return(t)
+}
+
+n_values <- c(10, 50, 100, 200, 300, 400, 500, 600)
+results_naive <- data.frame(
+  n = integer(),
+  method = character(),
+  time = numeric()
+)
+
+set.seed(123)
+for (n in n_values) {
+  cat("Testing n =", n, "\n")
+  
+  dist_matrix <- generate_dist_matrix(n)
+  
+  time_R <- microbenchmark(
+    naive_hclust_R(dist_matrix, method = "single", dendrogramme = FALSE),
+    times = 3
+  )$time / 1e9
+  
+  time_Rcpp <- microbenchmark(
+    naive_hclust_Rcpp(dist_matrix, method = "single", dendrogramme = FALSE),
+    times = 3
+  )$time / 1e9
+  
+  results_naive <- rbind(
+    results_naive,
+    data.frame(n = n, method = "naive_hclust_R", time = mean(time_R)),
+    data.frame(n = n, method = "naive_hclust_Rcpp", time = mean(time_Rcpp))
+  )
+}
+
+fit_R <- lm(time ~ I(n^3) - 1, data = filter(results_naive, method == "naive_hclust_R"))
+fit_Rcpp <- lm(time ~ I(n^3) - 1, data = filter(results_naive, method == "naive_hclust_Rcpp"))
+
+k_R <- coef(fit_R)[1]
+k_Rcpp <- coef(fit_Rcpp)[1]
+
+n_limit_R <- floor((300 / k_R)^(1/3))
+n_limit_Rcpp <- floor((300 / k_Rcpp)^(1/3))
+```
+
+
+```{r}
+n <- 100
+nbSimus <- 10
+
+time1 <- rep(0, nbSimus)  # naive_hclust_R
+time2 <- rep(0, nbSimus)  # naive_hclust_Rcpp
+time3 <- rep(0, nbSimus)  # fast_hclust_R
+time4 <- rep(0, nbSimus)  # fast_hclust_Rcpp
+
+for (i in 1:nbSimus) { time1[i] <- one.simu.time(n, func = "naive_hclust_R") }
+for (i in 1:nbSimus) { time2[i] <- one.simu.time(n, func = "naive_hclust_Rcpp") }
+for (i in 1:nbSimus) { time3[i] <- one.simu.time(n, func = "fast_hclust_R") }
+for (i in 1:nbSimus) { time4[i] <- one.simu.time(n, func = "fast_hclust_Rcpp") }
+
+cat("Gain C++ vs R (méthode naïve) :", mean(time1) / mean(time2), "\n")
+cat("Gain C++ vs R (méthode optimisée) :", mean(time3) / mean(time4), "\n")
+cat("Gain optimisé vs naïf (R) :", mean(time1) / mean(time3), "\n")
+cat("Gain optimisé vs naïf (C++) :", mean(time2) / mean(time4), "\n")
+```
+
+**Simulations avec** `microbenchmark`
+Comparons les méthodes C++ (`naive_hclust_Rcpp` et `fast_hclust_Rcpp`) pour n=1000.
+
+```{r}
+one.simu <- function(n, type = "random", func = "naive_hclust_R") {
+  if (type == "random") {
+    dist_matrix <- generate_dist_matrix(n)
+  } else {
+    dist_matrix <- generate_dist_matrix_nearly_sorted(n)
+  }
+  
+  if (func == "naive_hclust_R") {
+    naive_hclust_R(dist_matrix, method = "single", dendrogramme = FALSE)
+  }
+  if (func == "naive_hclust_Rcpp") {
+    naive_hclust_Rcpp(dist_matrix, method = "single", dendrogramme = FALSE)
+  }
+  if (func == "fast_hclust_R") {
+    fast_hclust_R(dist_matrix, method = "single", dendrogramme = FALSE)
+  }
+  if (func == "fast_hclust_Rcpp") {
+    fast_hclust_Rcpp(dist_matrix, method = "single", dendrogramme = FALSE)
+  }
+}
+
+benchmark_clustering <- function(n, times = 50) {
+  microbenchmark(
+    naive_hclust_Rcpp = one.simu(n, func = "naive_hclust_Rcpp"),
+    fast_hclust_Rcpp = one.simu(n, func = "fast_hclust_Rcpp"),
+    times = times,
+    control = list(gc = FALSE)
+  )
+}
+
+n_values <- c(50, 350)
+results <- lapply(n_values, benchmark_clustering)
+df_results <- do.call(rbind, Map(cbind, results, n = n_values))
+
+ggplot(df_results, aes(x = expr, y = time / 1e6, fill = expr)) +
+  geom_violin(alpha = 0.7) +
+  facet_wrap(~n, scales = "free") +
+  labs(title = "Clustering Algorithm in Rcpp Benchmark",
+       x = "Clustering Algorithm",
+       y = "Execution Time (ms)",
+       fill = "Algorithm") +
+  theme_minimal()
+
+df_results %>%
+  group_by(n, expr) %>%
+  summarise(
+    min_time = min(time) / 1e6,
+    q1_time = quantile(time, 0.25) / 1e6,
+    median_time = median(time) / 1e6,
+    mean_time = mean(time) / 1e6,
+    q3_time = quantile(time, 0.75) / 1e6,
+    max_time = max(time) / 1e6,
+    .groups = "drop"
+  )
+```
+
+
+```{r}
+results_all <- data.frame(
+  n = integer(),
+  method = character(),
+  time = numeric()
+)
+
+set.seed(123)
+for (n in n_values) {
+  cat("Testing n =", n, "\n")
+  
+  dist_matrix <- generate_dist_matrix(n)
+  
+  time_naive_R <- microbenchmark(
+    naive_hclust_R(dist_matrix, method = "single", dendrogramme = FALSE),
+    times = 3
+  )$time / 1e9
+  
+  time_naive_Rcpp <- microbenchmark(
+    naive_hclust_Rcpp(dist_matrix, method = "single", dendrogramme = FALSE),
+    times = 3
+  )$time / 1e9
+  
+  time_fast_R <- microbenchmark(
+    fast_hclust_R(dist_matrix, method = "single", dendrogramme = FALSE),
+    times = 3
+  )$time / 1e9
+  
+  time_fast_Rcpp <- microbenchmark(
+    fast_hclust_Rcpp(dist_matrix, method = "single", dendrogramme = FALSE),
+    times = 3
+  )$time / 1e9
+  
+  results_all <- rbind(
+    results_all,
+    data.frame(n = n, method = "naive_hclust_R", time = mean(time_naive_R)),
+    data.frame(n = n, method = "naive_hclust_Rcpp", time = mean(time_naive_Rcpp)),
+    data.frame(n = n, method = "fast_hclust_R", time = mean(time_fast_R)),
+    data.frame(n = n, method = "fast_hclust_Rcpp", time = mean(time_fast_Rcpp))
+  )
+}
+
+ggplot(results_all, aes(x = n, y = time, color = method, linetype = method)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  labs(
+    title = "Comparaison des temps : Méthodes naïves vs optimisées",
+    x = "Taille de l'échantillon (n)",
+    y = "Temps d'exécution (secondes)",
+    color = "Méthode", linetype = "Méthode"
+  ) +
+  theme_minimal()
+```
+
+
+
+
+
+
+## Évaluation de la complexité
+
+Nous allons confirmer les complexités théoriques en ajustant des régressions `log-log` sur les temps d'exécution observés pour différentes tailles d'entrée. Les complexités attendues sont :
+
+- **O(n³)** pour les méthodes naïves,
+- **O(n² log(n))** pour les méthodes optimisées.
+
+
+```{r}
+# Fonction pour benchmark avec moyenne et écart-type
+benchmark_clustering <- function(func_name, n_values, nbRep) {
+  results <- sapply(n_values, function(n) {
+    times <- replicate(nbRep, one.simu.time(n, func = func_name))
+    c(mean_time = mean(times), sd_time = sd(times))
+  })
+  
+  data.frame(n = n_values, mean_time = results["mean_time",], sd_time = results["sd_time",])
+}
+
+# Paramètres
+nbSimus <- 15
+nbRep <- 10
+
+# Méthodes naïves
+vector_n_naive <- exp(seq(log(100), log(500), length.out = 20))
+vector_n_naive <- round(vector_n_naive)
+res_naive_Rcpp <- benchmark_clustering("naive_hclust_Rcpp", vector_n_naive, nbRep)
+
+# Méthodes optimisées
+vector_n_fast <- exp(seq(log(100), log(500), length.out = 20))
+vector_n_fast <- round(vector_n_fast)
+res_fast_Rcpp <- benchmark_clustering("fast_hclust_Rcpp", vector_n_fast, nbRep)
+
+# Graphique log-log
+ggplot() +
+  geom_line(data = res_naive_Rcpp, aes(x = n, y = mean_time, color = "Naive (C++)"), size = 1) +
+  geom_errorbar(data = res_naive_Rcpp, 
+                aes(x = n, ymin = mean_time - sd_time, ymax = mean_time + sd_time, color = "Naive (C++)"), 
+                width = 0.1, alpha = 0.5) +
+  geom_line(data = res_fast_Rcpp, aes(x = n, y = mean_time, color = "Fast (C++)"), size = 1) +
+  geom_errorbar(data = res_fast_Rcpp, 
+                aes(x = n, ymin = mean_time - sd_time, ymax = mean_time + sd_time, color = "Fast (C++)"), 
+                width = 0.1, alpha = 0.5) +
+  scale_x_log10() +
+  scale_y_log10() +
+  labs(title = "Clustering Algorithm Performance (Log-Log Scale with Error Bars)",
+       x = "Data Length (log scale)", 
+       y = "Mean Running Time (log scale)",
+       color = "Algorithm") +
+  theme_minimal()
+
+# Régressions log-log
+model_naive <- lm(log(res_naive_Rcpp$mean_time) ~ log(res_naive_Rcpp$n))
+cat("Pente pour naive_hclust_Rcpp (attendue : 3) :", coef(model_naive)[2], "\n")
+
+model_fast <- lm(log(res_fast_Rcpp$mean_time) ~ log(res_fast_Rcpp$n))
+cat("Pente pour fast_hclust_Rcpp (attendue : 2) :", coef(model_fast)[2], "\n")
+```
+
+
+Les modèles ajustés confirment que le temps d’exécution des méthodes optimisées suit bien une croissance en ( O(n^2 \log(n)) ).
+
+Les constantes ( k ) sont cohérentes avec les performances observées, et l’écart entre R et C++ reste visible.
+
+
+---
+
+# Conclusion
+Nous avons implémenté et analysé une CAH naïve (( O(n^3) )) et une solution optimisée avec un k-d tree (( O(n^2 \log(n)) )). Les simulations montrent que :
+
+La méthode naïve en C++ (naive_hclust_Rcpp) est environ 17 fois plus rapide que celle en R (naive_hclust_R), avec des limites de ( n \leq 1659 ) pour C++ et ( n \leq 642 ) pour R (temps < 5 minutes).
+
+La méthode optimisée avec un k-d tree est significativement plus rapide, permettant de traiter des tailles ( n ) beaucoup plus grandes.
+Les implémentations en C++ restent plus performantes que celles en R, même pour la méthode optimisée.
+
+La complexité ( O(n^2 \log(n)) ) de la méthode optimisée a été validée par régression linéaire.
+
+Ce travail montre l’importance des structures de données comme le k-d tree pour améliorer les performances des algorithmes de clustering.
+
