@@ -1,11 +1,9 @@
-library(M2AlgoHAC)
+library(FastHierarchicalClust)
 library(dplyr)
 library(microbenchmark)
 library(ggplot2)
 library(usethis)
 library(devtools)
-devtools::document()
-devtools::load_all()
 
 
 # Générer des données de test
